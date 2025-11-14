@@ -255,7 +255,6 @@ export default function Chatbot({
 	avatarUrl?: string;
 	themeColor?: string;
 }) {
-	const [open, setOpen] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState("");
@@ -274,17 +273,16 @@ export default function Chatbot({
 
 	// Scroll to bottom when messages change
 	useEffect(() => {
-		if (open && messagesEndRef.current) {
+		if (messagesEndRef.current) {
 			messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
 		}
-	}, [messages, open]);
+	}, [messages]);
 
-	// Auto-focus input when user types and chat is open
+	// Auto-focus input when user types
 	useEffect(() => {
 		const handleKeyDown = (event: KeyboardEvent) => {
-			// Only focus if chat is open and the key pressed is a printable character
+			// Only focus if the key pressed is a printable character
 			if (
-				open &&
 				inputRef.current &&
 				!event.ctrlKey &&
 				!event.metaKey &&
@@ -309,11 +307,9 @@ export default function Chatbot({
 			}
 		};
 
-		if (open) {
-			document.addEventListener("keydown", handleKeyDown);
-			return () => document.removeEventListener("keydown", handleKeyDown);
-		}
-	}, [open]);
+		document.addEventListener("keydown", handleKeyDown);
+		return () => document.removeEventListener("keydown", handleKeyDown);
+	}, []);
 
 	// Handle click outside menu
 	useEffect(() => {
@@ -343,7 +339,7 @@ export default function Chatbot({
 
 	// Initialize welcome messages
 	useEffect(() => {
-		if (!open || messages.length > 0) return;
+		if (messages.length > 0) return;
 
 		setIsBotTyping(true);
 		const firstTimeout = setTimeout(() => {
@@ -372,7 +368,7 @@ export default function Chatbot({
 		}, TYPING_DELAY);
 
 		return () => clearTimeout(firstTimeout);
-	}, [open, messages.length]);
+	}, [messages.length]);
 
 	const addMessage = useCallback((message: Message) => {
 		setMessages((prev) => [...prev, message]);
@@ -526,14 +522,11 @@ export default function Chatbot({
 	};
 
 	const getChatWindowClasses = () => {
-		const baseClasses =
-			"fixed z-50 bg-white flex flex-col transition-all duration-300 ease-in-out";
+		const baseClasses = "fixed z-50 bg-white flex flex-col";
 		const positionClasses =
 			"right-0 left-0 top-0 bottom-0 md:right-6 md:left-auto md:top-auto md:bottom-25 md:w-96 md:max-w-full md:rounded-2xl md:shadow-2xl md:min-h-[500px] md:h-[600px] md:transform md:origin-bottom-right";
 
-		return open
-			? `${baseClasses} opacity-100 scale-100 translate-y-0 visible pointer-events-auto ${positionClasses}`
-			: `${baseClasses} opacity-0 scale-95 translate-y-4 invisible pointer-events-none ${positionClasses}`;
+		return `${baseClasses} opacity-100 scale-100 translate-y-0 visible pointer-events-auto ${positionClasses}`;
 	};
 
 	// Download transcript as a .txt file
@@ -639,14 +632,7 @@ export default function Chatbot({
 						ref={menuRef}
 					>
 						<button
-							className="text-white hover:text-gray-300 px-2 md:hidden"
-							aria-label="Close chat"
-							onClick={() => setOpen(false)}
-						>
-							<FaTimes className="w-6 h-6" />
-						</button>
-						<button
-							className="text-white px-2 hidden md:block cursor-pointer"
+							className="text-white px-2 cursor-pointer"
 							aria-label="Open menu"
 							onClick={() => setMenuOpen((v) => !v)}
 						>
@@ -666,6 +652,11 @@ export default function Chatbot({
 														index === 0
 															? "rounded-t-xl"
 															: ""
+													} ${
+														index ===
+														menuItems.length - 1
+															? "rounded-b-xl"
+															: ""
 													}`}
 													onClick={() => {
 														setMenuOpen(false);
@@ -683,21 +674,6 @@ export default function Chatbot({
 											</li>
 										)
 									)}
-									<li>
-										<button
-											className="w-full flex items-center font-light gap-2 p-3 hover:bg-gray-100 cursor-pointer rounded-b-xl border-t-1"
-											onClick={() => {
-												setMenuOpen(false);
-												setOpen(false);
-											}}
-										>
-											<FaTimes
-												className="w-5 h-5 mr-2"
-												style={{ color: themeColor }}
-											/>
-											Close
-										</button>
-									</li>
 								</ul>
 							</div>
 						)}
@@ -981,40 +957,6 @@ export default function Chatbot({
 					</button>
 				</div>
 			</div>
-
-			{/* Floating Button */}
-			<button
-				className={`fixed z-50 text-white p-0 rounded-full shadow-lg transition-colors flex items-center justify-center group cursor-pointer bottom-4 right-4 md:bottom-6 md:right-6 ${
-					open ? "md:block hidden" : "block"
-				}`}
-				style={{ backgroundColor: themeColor }}
-				onClick={() => setOpen(!open)}
-				aria-label={open ? "Close chat" : "Open chat"}
-			>
-				<div className="relative w-16 h-16">
-					<Image
-						src="https://thepaymentsassociation.org/wp-content/uploads/2023/09/AI-in-finance_web-1.png"
-						alt="Chatbot Avatar"
-						sizes="100px"
-						fill
-						className={`rounded-full transition-all duration-300 ease-in-out ${
-							open
-								? "opacity-0 scale-75"
-								: "opacity-100 scale-100"
-						}`}
-						style={{
-							objectFit: "cover",
-						}}
-					/>
-					<FaTimes
-						className={`w-7 h-7 text-white absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 transition-all duration-300 ease-in-out ${
-							open
-								? "opacity-100 rotate-0"
-								: "opacity-0 -rotate-90"
-						}`}
-					/>
-				</div>
-			</button>
 		</>
 	);
 }
