@@ -1,3 +1,4 @@
+"use client";
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import Image from "next/image";
 import ReactMarkdown from "react-markdown";
@@ -11,59 +12,70 @@ import {
 	FaSync,
 	FaEllipsisH,
 } from "react-icons/fa";
+import { FiArrowUpRight } from "react-icons/fi";
 import styles from "./Chatbot.module.css";
 import remarkGfm from "remark-gfm";
 import CodeBlock from "../CodeBlock";
-
-interface Message {
-	sender: "user" | "bot";
-	text?: string;
-	attachment?: {
-		name: string;
-		url: string;
-		type: string;
-	};
-	filePaths?: string[];
-	timestamp?: string;
-	id?: string;
-}
-
-// Add new interface for pending files
-interface PendingFile {
-	file: File;
-	url: string;
-}
-
-// Types
-type ChatRequestBody = {
-	conversation_id: string;
-	message: string;
-	file_paths?: string[];
-};
+import ProductCard from "../ProductCard";
+import {
+	handleProductsInResponse,
+	handleFileChange as handleFileChangeHandler,
+	removePendingFile as removePendingFileHandler,
+	uploadMultipleFiles,
+	sendMessage as sendMessageHandler,
+	createUserMessage,
+	createErrorMessage,
+	getCustomerInfo,
+	handleCustomerSubmit as handleCustomerSubmitHandler,
+	handleCloseCustomerModal as handleCloseCustomerModalHandler,
+	handleDownloadTranscript as handleDownloadTranscriptHandler,
+	handleRefreshChat as handleRefreshChatHandler,
+	initializeConversationId,
+	getOrCreateConversationId,
+	toggleTimestamp as toggleTimestampHandler,
+	getMessageClasses,
+	getChatWindowClasses,
+	handleScrollStart as handleScrollStartHandler,
+	setupAutoFocusHandler,
+	setupClickOutsideHandler,
+	setupScrollInteractionHandler,
+	handleInputKeyDown,
+	handleFormSubmit,
+} from "./handlers";
+import { Message, PendingFile, CustomerInfo, ChatRequestBody } from "./types";
 
 // Constants
 // const DEFAULT_AVATAR = "/message.png";
 const DEFAULT_AVATAR =
-	"https://www.tierra.vn/wp-content/uploads/2025/06/logo-cong-ty-tierra-512x512-1.png";
-const API_BASE_URL = "http://127.0.0.1:8000";
+	"https://i.pinimg.com/originals/7d/9b/1d/7d9b1d662b28cd365b33a01a3d0288e1.gif";
+const API_BASE_URL = "http://localhost:8000";
 const TYPING_DELAY = 1200;
 const CONV_ID_STORAGE_KEY = "chatbot_conversation_id";
 const DEFAULT_THEME_COLOR = "#b48c72";
 
-function generateConversationId(): string {
-	return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
+// Add constant for max total files
+const MAX_TOTAL_FILES = 5;
+
+// Function to preprocess text for better markdown rendering
+const preprocessText = (text: string): string => {
+	// Replace \n- with proper markdown list format
+	return text
+		.replace(/\\n-/g, "\n- ")
+		.replace(/\\n/g, "\n")
+		.replace(/\\t/g, "\t");
+};
 
 // ReactMarkdown components configuration
 const markdownComponents: Components = {
 	a: ({ children, ...props }) => (
 		<a
 			{...props}
-			className="text-blue-600 hover:text-blue-800 underline"
+			className="text-blue-600 hover:underline inline-flex items-center"
 			target="_blank"
 			rel="noopener noreferrer"
 		>
 			{children}
+			<FiArrowUpRight className="w-4" />
 		</a>
 	),
 	strong: ({ children }) => (
@@ -86,11 +98,14 @@ const markdownComponents: Components = {
 			</code>
 		);
 	},
-	pre: ({ children, ...props }) => {
+	pre: ({ children }) => {
 		// Check if this is a code block with language
 		const codeElement = React.Children.only(
 			children
-		) as React.ReactElement<any>;
+		) as React.ReactElement<{
+			className?: string;
+			children: React.ReactNode;
+		}>;
 		if (codeElement?.props?.className?.includes("language-")) {
 			const language = codeElement.props.className.replace(
 				"language-",
@@ -123,128 +138,13 @@ const markdownComponents: Components = {
 		</li>
 	),
 	p: ({ children, ...props }) => (
-		<p {...props} className="mb-2 last:mb-0">
+		<p {...props} className="mb-2 last:mb-0 whitespace-pre-wrap">
 			{children}
 		</p>
 	),
 };
 
-// Streaming version
-const sendMessageStreaming = async (
-	requestBody: ChatRequestBody,
-	addMessage: (msg: Message) => void,
-	setMessages: React.Dispatch<React.SetStateAction<Message[]>>,
-	setIsBotTyping: React.Dispatch<React.SetStateAction<boolean>>
-) => {
-	const response = await fetch(`${API_BASE_URL}/chat/stream`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(requestBody),
-	});
-
-	if (!response.ok) {
-		throw new Error(`HTTP error! status: ${response.status}`);
-	}
-
-	let botMessageId: string | null = null;
-	let accumulatedText = "";
-
-	const reader = response.body?.getReader();
-	const decoder = new TextDecoder();
-
-	if (reader) {
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-
-			const chunk = decoder.decode(value);
-			const lines = chunk.split("\n");
-
-			for (const line of lines) {
-				if (line.startsWith("data: ")) {
-					try {
-						const data = JSON.parse(line.slice(6));
-
-						if (data.type === "chunk" && data.content) {
-							accumulatedText += data.content;
-
-							if (!botMessageId) {
-								botMessageId = Date.now().toString();
-								addMessage({
-									sender: "bot",
-									text: accumulatedText,
-									timestamp: new Date().toISOString(),
-									id: botMessageId,
-								});
-								setIsBotTyping(false);
-							} else {
-								setMessages((prev) =>
-									prev.map((msg) =>
-										msg.id === botMessageId
-											? { ...msg, text: accumulatedText }
-											: msg
-									)
-								);
-							}
-						} else if (data.type === "error") {
-							if (botMessageId) {
-								setMessages((prev) =>
-									prev.map((msg) =>
-										msg.id === botMessageId
-											? {
-													...msg,
-													text: "Sorry, I encountered an error. Please try again.",
-											  }
-											: msg
-									)
-								);
-							}
-							break;
-						} else if (data.type === "end") {
-							break;
-						}
-					} catch (e) {
-						console.error("Error parsing streaming data:", e);
-					}
-				}
-			}
-		}
-	}
-};
-
-// Non-streaming version
-const sendMessageNonStreaming = async (
-	requestBody: ChatRequestBody,
-	addMessage: (msg: Message) => void,
-	setIsBotTyping: React.Dispatch<React.SetStateAction<boolean>>
-) => {
-	const response = await fetch(`${API_BASE_URL}/chat`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(requestBody),
-	});
-
-	if (!response.ok) {
-		throw new Error(`HTTP error! status: ${response.status}`);
-	}
-
-	const responseData = await response.json();
-	setIsBotTyping(false);
-
-	if (responseData.response) {
-		addMessage({
-			sender: "bot",
-			text: responseData.response,
-			timestamp: new Date().toISOString(),
-		});
-	} else {
-		addMessage({
-			sender: "bot",
-			text: "I apologize, but I couldn't generate a response at this time. Please try again.",
-			timestamp: new Date().toISOString(),
-		});
-	}
-};
+// sendMessage is now imported from handlers
 
 export default function Chatbot({
 	title = "Chat with Tierra",
@@ -255,6 +155,7 @@ export default function Chatbot({
 	avatarUrl?: string;
 	themeColor?: string;
 }) {
+	const [open, setOpen] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState("");
@@ -265,88 +166,98 @@ export default function Chatbot({
 	// Add new state for pending files
 	const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
 	const [conversationId, setConversationId] = useState<string>("");
+	// Add new state for uploaded files count
+	const [uploadedFilesCount, setUploadedFilesCount] = useState(0);
+	// Add new state for uploaded file names
+	const [uploadedFileNames, setUploadedFileNames] = useState<string[]>([]);
+	// Add scroll interaction state
+	const [isScrolling, setIsScrolling] = useState(false);
+	const [scrollStartY, setScrollStartY] = useState(0);
+	const [scrollStartScrollTop, setScrollStartScrollTop] = useState(0);
+
+	// Add new state for customer registration modal
+	const [showCustomerModal, setShowCustomerModal] = useState(true);
+	const [isClosingCustomerModal, setIsClosingCustomerModal] = useState(false);
+	const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
+		name: "",
+		phone: "",
+	});
+	const [customerRegistered, setCustomerRegistered] = useState(false);
+
+	// Add new state for dropdown visibility
+	const [showFileDropdown, setShowFileDropdown] = useState(false);
 
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const menuRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLInputElement>(null);
+	const messagesContainerRef = useRef<HTMLDivElement>(null);
+	const customerModalRef = useRef<HTMLDivElement>(null);
+	// Add new ref for file dropdown
+	const fileDropdownRef = useRef<HTMLDivElement>(null);
 
 	// Scroll to bottom when messages change
 	useEffect(() => {
-		if (messagesEndRef.current) {
+		if (open && messagesEndRef.current) {
 			messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
 		}
-	}, [messages]);
+	}, [messages, open]);
 
-	// Auto-focus input when user types
+	// Auto-focus input when user types and chat is open
 	useEffect(() => {
-		const handleKeyDown = (event: KeyboardEvent) => {
-			// Only focus if the key pressed is a printable character
-			if (
-				inputRef.current &&
-				!event.ctrlKey &&
-				!event.metaKey &&
-				!event.altKey
-			) {
-				// Check if the key is a printable character (not special keys like Enter, Escape, etc.)
-				if (
-					event.key.length === 1 ||
-					event.key === "Backspace" ||
-					event.key === "Delete"
-				) {
-					// Don't focus if user is already typing in the input or another input field
-					const activeElement = document.activeElement;
-					if (
-						activeElement !== inputRef.current &&
-						activeElement?.tagName !== "INPUT" &&
-						activeElement?.tagName !== "TEXTAREA"
-					) {
-						inputRef.current.focus();
-					}
-				}
-			}
-		};
-
-		document.addEventListener("keydown", handleKeyDown);
-		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, []);
+		return setupAutoFocusHandler(open, inputRef);
+	}, [open]);
 
 	// Handle click outside menu
 	useEffect(() => {
-		const handleClickOutside = (event: MouseEvent) => {
-			if (
-				menuRef.current &&
-				!menuRef.current.contains(event.target as Node)
-			) {
-				setMenuOpen(false);
-			}
-		};
-
-		if (menuOpen) {
-			document.addEventListener("mousedown", handleClickOutside);
-			return () =>
-				document.removeEventListener("mousedown", handleClickOutside);
-		}
+		return setupClickOutsideHandler(menuOpen, menuRef, setMenuOpen);
 	}, [menuOpen]);
+
+	// Handle scroll interaction (click and drag)
+	useEffect(() => {
+		return setupScrollInteractionHandler(
+			isScrolling,
+			scrollStartY,
+			scrollStartScrollTop,
+			messagesContainerRef,
+			setIsScrolling
+		);
+	}, [isScrolling, scrollStartY, scrollStartScrollTop]);
+
+	// Add click outside handler for file dropdown
+	useEffect(() => {
+		return setupClickOutsideHandler(
+			showFileDropdown,
+			fileDropdownRef,
+			setShowFileDropdown
+		);
+	}, [showFileDropdown]);
 
 	// Initialize a fresh conversation id on each page load (reset on refresh)
 	useEffect(() => {
-		if (typeof window === "undefined") return;
-		const newId = generateConversationId();
-		sessionStorage.setItem(CONV_ID_STORAGE_KEY, newId);
-		setConversationId(newId);
+		initializeConversationId(setConversationId, CONV_ID_STORAGE_KEY);
+
+		// Check if customer info is stored in session storage
+		const storedCustomerInfo = getCustomerInfo();
+		if (storedCustomerInfo) {
+			setCustomerInfo(storedCustomerInfo);
+			setCustomerRegistered(true);
+			setShowCustomerModal(false);
+		} else {
+			setShowCustomerModal(true);
+		}
 	}, []);
 
 	// Initialize welcome messages
 	useEffect(() => {
-		if (messages.length > 0) return;
+		if (!open || messages.length > 0) return;
 
 		setIsBotTyping(true);
 		const firstTimeout = setTimeout(() => {
 			setMessages([
 				{
 					sender: "bot",
-					text: "Chào bạn, mình là trợ lý AI của Tierra",
+					text: `Chào ${customerInfo.name}, mình là trợ lý AI của Tierra`,
 					timestamp: new Date().toISOString(),
 				},
 			]);
@@ -368,92 +279,95 @@ export default function Chatbot({
 		}, TYPING_DELAY);
 
 		return () => clearTimeout(firstTimeout);
-	}, [messages.length]);
+	}, [open, messages.length, customerInfo.name]);
 
 	const addMessage = useCallback((message: Message) => {
 		setMessages((prev) => [...prev, message]);
 	}, []);
 
+	// Handle initial chat opening - show customer modal first if not registered
+	const handleOpenChat = () => {
+		if (!customerRegistered) {
+			setShowCustomerModal(true);
+		} else {
+			setOpen(true);
+		}
+	};
+
+	// Handle customer form submission
+	const handleCustomerSubmit = (e: React.FormEvent) => {
+		handleCustomerSubmitHandler(
+			e,
+			customerInfo,
+			setCustomerRegistered,
+			setShowCustomerModal,
+			setOpen
+		);
+	};
+
+	// Handle closing customer modal
+	const handleCloseCustomerModal = () => {
+		setIsClosingCustomerModal(true);
+		setTimeout(() => {
+			handleCloseCustomerModalHandler(
+				setShowCustomerModal,
+				setCustomerInfo
+			);
+			setIsClosingCustomerModal(false);
+		}, 300); // Match the animation duration
+	};
+
 	const handleSend = async () => {
-		if (!input.trim() && pendingFiles.length === 0) return;
+		// Require at least some text input - don't allow sending files without a message
+		if (!input.trim()) return;
 
 		const userMessage = input.trim();
 
-		// Upload pending files first and show them as messages
-		const uploadedFilePaths: string[] = [];
-		if (pendingFiles.length > 0) {
+		// Clear pending files immediately when starting to send
+		const filesToUpload = [...pendingFiles];
+		setPendingFiles([]);
+
+		// Upload pending files first using the file upload handler
+		let uploadedFilePaths: string[] = [];
+		if (filesToUpload.length > 0) {
 			try {
-				// Show file messages immediately for better UX
-				for (const pendingFile of pendingFiles) {
-					addMessage({
-						sender: "user",
-						attachment: {
-							name: pendingFile.file.name,
-							url: pendingFile.url,
-							type: pendingFile.file.type,
-						},
-						timestamp: new Date().toISOString(),
-					});
-				}
-
-				// Upload files to backend
-				for (const pendingFile of pendingFiles) {
-					const formData = new FormData();
-					formData.append("file", pendingFile.file);
-
-					const response = await fetch(
-						`${API_BASE_URL}/upload-file`,
-						{
-							method: "POST",
-							body: formData,
-						}
-					);
-
-					if (!response.ok) {
-						throw new Error(`Upload failed: ${response.status}`);
-					}
-
-					const uploadResult = await response.json();
-					uploadedFilePaths.push(uploadResult.file_path);
-				}
-			} catch (error) {
-				console.error("Error uploading files:", error);
-				addMessage({
-					sender: "bot",
-					text: "Sorry, I couldn't upload your files. Please try again.",
-					timestamp: new Date().toISOString(),
-				});
+				uploadedFilePaths = await uploadMultipleFiles(
+					filesToUpload,
+					API_BASE_URL,
+					addMessage
+				);
+				// Update uploaded files count
+				setUploadedFilesCount((prev) => prev + filesToUpload.length);
+				// Update uploaded file names
+				setUploadedFileNames((prev) => [
+					...prev,
+					...filesToUpload.map((file) => file.file.name),
+				]);
+			} catch {
+				// Error already handled in uploadMultipleFiles
 				return;
 			}
 		}
 
 		// Create message object for text (if any)
 		if (userMessage) {
-			const messageData: Message = {
-				sender: "user",
-				text: userMessage,
-				timestamp: new Date().toISOString(),
-			};
+			const messageData = createUserMessage(userMessage);
 			addMessage(messageData);
 		}
 
-		// Clear input and pending files
+		// Clear input
 		setInput("");
-		setPendingFiles([]);
 
 		// Keep the typing indicator
 		setIsBotTyping(true);
 
 		try {
 			// Ensure we have a conversation id (race-safe if user sends immediately)
-			let convId = conversationId;
-			if (!convId) {
-				convId = generateConversationId();
-				setConversationId(convId);
-				if (typeof window !== "undefined") {
-					sessionStorage.setItem(CONV_ID_STORAGE_KEY, convId);
-				}
-			}
+			const convId = getOrCreateConversationId(
+				conversationId,
+				setConversationId,
+				CONV_ID_STORAGE_KEY
+			);
 
 			const requestBody: ChatRequestBody = {
 				conversation_id: convId,
@@ -464,25 +378,16 @@ export default function Chatbot({
 				requestBody.file_paths = uploadedFilePaths;
 			}
 
-			// Choose which function to use:
-			// await sendMessageStreaming(
-			// 	requestBody,
-			// 	addMessage,
-			// 	setMessages,
-			// 	setIsBotTyping
-			// );
-			await sendMessageNonStreaming(
+			await sendMessageHandler(
 				requestBody,
 				addMessage,
-				setIsBotTyping
+				setIsBotTyping,
+				API_BASE_URL,
+				handleProductsInResponse
 			);
 		} catch (error) {
 			console.error("Error sending message to backend:", error);
-			addMessage({
-				sender: "bot",
-				text: "Sorry, I'm having trouble connecting to my backend. Please try again later.",
-				timestamp: new Date().toISOString(),
-			});
+			addMessage(createErrorMessage());
 		} finally {
 			// Always hide typing indicator
 			setIsBotTyping(false);
@@ -490,104 +395,73 @@ export default function Chatbot({
 	};
 
 	const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-		const file = e.target.files?.[0];
-		if (!file) return;
+		handleFileChangeHandler(
+			e,
+			setPendingFiles,
+			3,
+			uploadedFilesCount,
+			MAX_TOTAL_FILES
+		);
 
-		// Only add to pending files, don't upload or create message yet
-		const url = URL.createObjectURL(file);
-		setPendingFiles((prev) => [...prev, { file, url }]);
-
-		e.target.value = "";
+		// Ensure focus returns to text input after file selection
+		setTimeout(() => {
+			if (inputRef.current) {
+				inputRef.current.focus();
+			}
+		}, 100);
 	};
 
 	const removePendingFile = (index: number) => {
-		setPendingFiles((prev) => {
-			const newFiles = prev.filter((_, i) => i !== index);
-			// Clean up the object URL to prevent memory leaks
-			URL.revokeObjectURL(prev[index].url);
-			return newFiles;
-		});
+		removePendingFileHandler(index, setPendingFiles);
+	};
+
+	// Handle scroll interaction start
+	const handleScrollStart = (e: React.MouseEvent) => {
+		handleScrollStartHandler(
+			e,
+			setIsScrolling,
+			setScrollStartY,
+			setScrollStartScrollTop,
+			messagesContainerRef
+		);
 	};
 
 	const toggleTimestamp = (idx: number) => {
-		setVisibleTimestampIdx(visibleTimestampIdx === idx ? null : idx);
+		toggleTimestampHandler(
+			idx,
+			visibleTimestampIdx,
+			setVisibleTimestampIdx
+		);
 	};
 
-	const getMessageClasses = (sender: "user" | "bot") => {
-		const baseClasses =
-			"px-4 py-2 rounded-xl text-sm shadow cursor-pointer relative z-20 break-words overflow-wrap-anywhere max-w-full";
-		return sender === "user"
-			? `${baseClasses} text-white`
-			: `${baseClasses} bg-white text-gray-800 border border-gray-200`;
-	};
+	// getMessageClasses is now imported from handlers
 
-	const getChatWindowClasses = () => {
-		const baseClasses = "fixed z-50 bg-white flex flex-col";
-		const positionClasses =
-			"right-0 left-0 top-0 bottom-0 md:right-6 md:left-auto md:top-auto md:bottom-25 md:w-96 md:max-w-full md:rounded-2xl md:shadow-2xl md:min-h-[500px] md:h-[600px] md:transform md:origin-bottom-right";
-
-		return `${baseClasses} opacity-100 scale-100 translate-y-0 visible pointer-events-auto ${positionClasses}`;
-	};
+	// getChatWindowClasses is now imported from handlers
 
 	// Download transcript as a .txt file
 	const handleDownloadTranscript = () => {
-		const lines: string[] = [];
-
-		lines.push("Transcript");
-		lines.push(new Date().toUTCString());
-		lines.push("");
-
-		messages.forEach((msg, idx) => {
-			const time = msg.timestamp
-				? new Date(msg.timestamp).toLocaleString()
-				: "";
-			const sender = msg.sender === "user" ? "You" : "Assistant";
-
-			if (msg.text && msg.text.trim()) {
-				lines.push(`[${time}] ${sender}: ${msg.text}`);
-			} else if (msg.attachment) {
-				lines.push(`[${time}] ${sender}: Attachment`);
-				lines.push(
-					`[${time}] ${sender}: ${msg.attachment.name} (${msg.attachment.type})`
-				);
-			}
-
-			if (idx < messages.length - 1) lines.push("");
-		});
-
-		const transcript = lines.join("\n");
-		const blob = new Blob([transcript], {
-			type: "text/plain;charset=utf-8",
-		});
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement("a");
-
-		a.href = url;
-		a.download = "transcript.txt";
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
+		handleDownloadTranscriptHandler(messages);
 	};
 
 	// Refresh chat function
 	const handleRefreshChat = () => {
-		// Clear all messages
-		setMessages([]);
-		// Clear input
-		setInput("");
-		// Clear pending files
-		setPendingFiles([]);
-		// Generate new conversation ID
-		const newId = generateConversationId();
-		setConversationId(newId);
-		if (typeof window !== "undefined") {
-			sessionStorage.setItem(CONV_ID_STORAGE_KEY, newId);
-		}
-		// Reset typing state
-		setIsBotTyping(false);
-		// Reset timestamp visibility
-		setVisibleTimestampIdx(null);
+		handleRefreshChatHandler(
+			setMessages,
+			setInput,
+			setPendingFiles,
+			setConversationId,
+			setIsBotTyping,
+			setVisibleTimestampIdx,
+			setCustomerRegistered,
+			setCustomerInfo,
+			setOpen,
+			setShowCustomerModal,
+			CONV_ID_STORAGE_KEY
+		);
+		// Reset uploaded files count
+		setUploadedFilesCount(0);
+		// Reset uploaded file names
+		setUploadedFileNames([]);
 	};
 
 	// Menu items configuration
@@ -603,8 +477,130 @@ export default function Chatbot({
 
 	return (
 		<>
+			{/* Customer Registration Modal */}
+			{showCustomerModal && (
+				<div
+					ref={customerModalRef}
+					className="fixed top-0 right-0 z-[60] p-4 transform transition-all duration-300 ease-out"
+					style={{
+						animation: isClosingCustomerModal
+							? "slideOutToRight 0.3s ease-in forwards"
+							: "slideInFromRight 0.3s ease-out forwards",
+					}}
+				>
+					<div className="bg-white rounded-2xl shadow-2xl max-w-sm w-80 p-5 border border-gray-200">
+						<div className="flex items-center mb-6">
+							<div className="flex items-center gap-3">
+								<div
+									className="w-10 h-10 rounded-full overflow-hidden relative flex-shrink-0"
+									style={{ backgroundColor: themeColor }}
+								>
+									<Image
+										src="https://www.tierra.vn/wp-content/uploads/2025/06/logo-cong-ty-tierra-512x512-1.png"
+										alt="Bot Avatar"
+										sizes="100px"
+										fill
+										style={{
+											objectFit: "cover",
+											filter: "brightness(0) invert(1)",
+										}}
+									/>
+								</div>
+								<h3 className="text-xl font-semibold text-gray-800">
+									{title}
+								</h3>
+							</div>
+						</div>
+
+						<p className="text-gray-600 mb-6">
+							Để bắt đầu trò chuyện, vui lòng cung cấp thông tin
+							của bạn:
+						</p>
+
+						<form
+							onSubmit={(e) =>
+								handleFormSubmit(e, () =>
+									handleCustomerSubmit(e)
+								)
+							}
+							className="space-y-4"
+						>
+							<div>
+								<label
+									htmlFor="customerName"
+									className="block text-sm font-medium text-gray-700 mb-2"
+								>
+									Tên của bạn *
+								</label>
+								<input
+									type="text"
+									id="customerName"
+									value={customerInfo.name}
+									onChange={(e) =>
+										setCustomerInfo((prev) => ({
+											...prev,
+											name: e.target.value,
+										}))
+									}
+									className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none transition-all duration-200"
+									style={{
+										borderColor: customerInfo.name.trim()
+											? themeColor
+											: "#e5e7eb",
+									}}
+									placeholder="Nhập tên của bạn"
+									required
+								/>
+							</div>
+
+							<div>
+								<label
+									htmlFor="customerPhone"
+									className="block text-sm font-medium text-gray-700 mb-2"
+								>
+									Số điện thoại *
+								</label>
+								<input
+									type="tel"
+									id="customerPhone"
+									value={customerInfo.phone}
+									onChange={(e) =>
+										setCustomerInfo((prev) => ({
+											...prev,
+											phone: e.target.value,
+										}))
+									}
+									className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:outline-none transition-all duration-200"
+									style={{
+										borderColor: customerInfo.phone.trim()
+											? themeColor
+											: "#e5e7eb",
+									}}
+									placeholder="Nhập số điện thoại"
+									required
+								/>
+							</div>
+
+							<div className="pt-4">
+								<button
+									type="submit"
+									disabled={
+										!customerInfo.name.trim() ||
+										!customerInfo.phone.trim()
+									}
+									className="w-full px-4 py-3 text-white rounded-xl transition-all duration-200 font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:scale-105 active:scale-95 hover:cursor-pointer"
+									style={{ backgroundColor: themeColor }}
+								>
+									Bắt đầu chat
+								</button>
+							</div>
+						</form>
+					</div>
+				</div>
+			)}
+
 			{/* Chat Window */}
-			<div className={getChatWindowClasses()}>
+			<div className={getChatWindowClasses(open)}>
 				{/* Header */}
 				<div
 					className="relative flex items-center justify-between p-4 border-b border-gray-100 md:rounded-t-2xl"
@@ -612,7 +608,7 @@ export default function Chatbot({
 				>
 					<div className="w-10 h-10 rounded-full overflow-hidden relative flex-shrink-0">
 						<Image
-							src={avatarUrl}
+							src="https://www.tierra.vn/wp-content/uploads/2025/06/logo-cong-ty-tierra-512x512-1.png"
 							alt="Bot Avatar"
 							sizes="100px"
 							fill
@@ -627,6 +623,57 @@ export default function Chatbot({
 							{title}
 						</span>
 					</div>
+					{/* Add uploaded files count display */}
+					{uploadedFilesCount > 0 && (
+						<div
+							className="flex-shrink-0 text-right relative"
+							ref={fileDropdownRef}
+						>
+							<button
+								onClick={() =>
+									setShowFileDropdown(!showFileDropdown)
+								}
+								className="relative inline-flex items-center justify-center w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 transition-all duration-200 cursor-pointer group"
+								aria-label="View uploaded files"
+							>
+								<FaRegFileAlt className="w-4 h-4 text-white" />
+								{/* Badge */}
+								<span className="absolute -top-1 -right-1 bg-white text-gray-800 text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center shadow-sm">
+									{uploadedFilesCount}
+								</span>
+							</button>
+
+							{/* Dropdown */}
+							{showFileDropdown && (
+								<div className="absolute top-full right-0 mt-2 w-64 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden">
+									<div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+										<h3 className="text-sm font-semibold text-gray-800">
+											Uploaded Files
+										</h3>
+									</div>
+									<div className="max-h-48 overflow-y-auto">
+										{uploadedFileNames.map(
+											(fileName, index) => (
+												<div
+													key={index}
+													className="px-4 py-3 hover:bg-gray-50 transition-colors border-b border-gray-100 last:border-b-0"
+												>
+													<div className="flex items-center gap-3">
+														<div className="w-8 h-8 bg-gray-100 rounded-lg flex items-center justify-center flex-shrink-0">
+															<FaRegFileAlt className="w-4 h-4 text-gray-500" />
+														</div>
+														<span className="text-sm text-gray-700 truncate font-medium">
+															{fileName}
+														</span>
+													</div>
+												</div>
+											)
+										)}
+									</div>
+								</div>
+							)}
+						</div>
+					)}
 					<div
 						className="flex-shrink-0 relative flex items-center gap-2"
 						ref={menuRef}
@@ -682,7 +729,10 @@ export default function Chatbot({
 
 				{/* Messages */}
 				<div
-					className={`flex-1 overflow-y-auto p-4 space-y-3 h-96 md:h-[400px] ${styles["scrollbar-hide"]}`}
+					ref={messagesContainerRef}
+					className={`flex-1 overflow-y-auto py-4 px-2 space-y-3 h-96 md:h-[400px] ${styles["scrollbar-hide"]}`}
+					onMouseDown={handleScrollStart}
+					style={{ userSelect: isScrolling ? "none" : "auto" }}
 				>
 					{messages.map((msg, idx) => (
 						<div
@@ -693,7 +743,7 @@ export default function Chatbot({
 									: "justify-start"
 							}`}
 						>
-							{/* Bot Avatar - only show for bot messages */}
+							{/* Bot Avatar - REMOVED */}
 							{msg.sender === "bot" && (
 								<div className="w-8 h-8 rounded-full overflow-hidden relative flex-shrink-0 mr-2 self-start mt-1">
 									<Image
@@ -701,20 +751,142 @@ export default function Chatbot({
 										alt="Bot Avatar"
 										sizes="100px"
 										fill
+										unoptimized
 										style={{ objectFit: "cover" }}
 									/>
 								</div>
 							)}
 
 							<div
-								className={`flex flex-col max-w-[95%] sm:max-w-[90%] md:max-w-[85%] min-w-0 w-fit ${
+								className={`flex flex-col max-w-full min-w-0 w-full ${
 									msg.sender === "user"
 										? "items-end"
-										: "items-center"
+										: "items-start"
 								}`}
 							>
 								<div className="relative group z-10">
-									{msg.attachment ? (
+									{/* Filter chips for refine action */}
+									{msg.sender === "bot" &&
+										msg.action === "refine" &&
+										msg.filters &&
+										msg.filters.length > 0 && (
+											<div className="mb-3 flex flex-wrap gap-2">
+												{msg.filters.map(
+													(filter, idx) => (
+														<button
+															key={idx}
+															onClick={() => {
+																setInput(
+																	`Filter: ${filter}`
+																);
+																if (
+																	typeof window !==
+																		"undefined" &&
+																	window.innerWidth >=
+																		1024
+																) {
+																	inputRef.current?.focus();
+																}
+															}}
+															className="px-3 py-1.5 text-xs font-medium rounded-full border transition-all duration-200 hover:scale-105 cursor-pointer"
+															style={{
+																backgroundColor: `${themeColor}15`,
+																borderColor:
+																	themeColor,
+																color: themeColor,
+															}}
+														>
+															{filter}
+														</button>
+													)
+												)}
+											</div>
+										)}
+
+									{msg.product ? (
+										<div>
+											{/* Render single product card */}
+											<ProductCard
+												product={msg.product}
+												themeColor={themeColor}
+											/>
+											{/* "Xem thêm" button inside the product card message */}
+											{msg.showMoreButton && (
+												<div className="mt-3 flex justify-center">
+													<button
+														onClick={() => {
+															setInput(
+																"Có mẫu nào khác không?"
+															);
+															if (
+																typeof window !==
+																	"undefined" &&
+																window.innerWidth >=
+																	1024
+															) {
+																inputRef.current?.focus();
+															}
+														}}
+														className="px-4 py-2 text-sm font-medium rounded-lg border transition-all duration-200 hover:scale-105 cursor-pointer"
+														style={{
+															backgroundColor: `${themeColor}10`,
+															borderColor:
+																themeColor,
+															color: themeColor,
+														}}
+													>
+														Xem thêm
+													</button>
+												</div>
+											)}
+										</div>
+									) : msg.products ? (
+										<div>
+											{/* Render multiple product cards in a grid */}
+											<div className="flex gap-2">
+												{msg.products.map(
+													(product, idx) => (
+														<ProductCard
+															key={idx}
+															product={product}
+															themeColor={
+																themeColor
+															}
+														/>
+													)
+												)}
+											</div>
+											{/* "Xem thêm" button inside the products message */}
+											{msg.showMoreButton && (
+												<div className="mt-3 flex justify-center">
+													<button
+														onClick={() => {
+															setInput(
+																"Có mẫu nào khác không?"
+															);
+															if (
+																typeof window !==
+																	"undefined" &&
+																window.innerWidth >=
+																	1024
+															) {
+																inputRef.current?.focus();
+															}
+														}}
+														className="px-4 py-2 text-sm font-medium rounded-lg border transition-all duration-200 hover:scale-105 cursor-pointer"
+														style={{
+															backgroundColor: `${themeColor}10`,
+															borderColor:
+																themeColor,
+															color: themeColor,
+														}}
+													>
+														Xem thêm
+													</button>
+												</div>
+											)}
+										</div>
+									) : msg.attachment ? (
 										<div
 											className={`${getMessageClasses(
 												msg.sender
@@ -731,7 +903,7 @@ export default function Chatbot({
 											tabIndex={0}
 											aria-label="Show message time"
 										>
-											<FaPaperclip className="inline mr-1" />
+											<FaPaperclip className="inline" />
 											<a
 												href={msg.attachment.url}
 												download={msg.attachment.name}
@@ -772,7 +944,9 @@ export default function Chatbot({
 															remarkGfm,
 														]}
 													>
-														{msg.text || ""}
+														{preprocessText(
+															msg.text || ""
+														)}
 													</ReactMarkdown>
 												</div>
 											) : (
@@ -836,10 +1010,11 @@ export default function Chatbot({
 									alt="Bot Avatar"
 									sizes="100px"
 									fill
+									unoptimized
 									style={{ objectFit: "cover" }}
 								/>
 							</div>
-							<div className="flex flex-col items-center max-w-[95%] sm:max-w-[90%] md:max-w-[85%] min-w-0 w-fit">
+							<div className="flex flex-col items-start max-w-full min-w-0 w-full">
 								<div className="px-4 py-2 rounded-2xl text-sm shadow bg-white text-gray-800 border border-gray-200 rounded-bl-sm flex items-center gap-2">
 									<span className={styles["dot-typing"]}>
 										<span className={styles.dot}></span>
@@ -853,7 +1028,7 @@ export default function Chatbot({
 					<div ref={messagesEndRef} />
 				</div>
 
-				{/* Pending files display */}
+				{/* Pending files display - only show when there are pending files */}
 				{pendingFiles.length > 0 && (
 					<div className="px-4 py-3 bg-gray-50 border-t border-gray-100">
 						<div className="flex items-center gap-2 mb-2">
@@ -864,6 +1039,12 @@ export default function Chatbot({
 							<span className="text-xs font-medium text-gray-600">
 								{pendingFiles.length} file
 								{pendingFiles.length > 1 ? "s" : ""} ready
+								{uploadedFilesCount > 0 && (
+									<span className="text-gray-500">
+										({uploadedFilesCount}/{MAX_TOTAL_FILES}{" "}
+										total uploaded)
+									</span>
+								)}
 							</span>
 						</div>
 						<div className="space-y-1">
@@ -896,28 +1077,45 @@ export default function Chatbot({
 					<div className="relative">
 						<button
 							className={`p-2 rounded-lg transition-all duration-200 ${
-								pendingFiles.length >= 3
+								pendingFiles.length >= 3 ||
+								uploadedFilesCount >= MAX_TOTAL_FILES
 									? "opacity-40 cursor-not-allowed bg-gray-50"
-									: "hover:bg-gray-50  cursor-pointer"
+									: "hover:bg-gray-50 cursor-pointer"
 							}`}
-							onClick={() =>
-								pendingFiles.length < 3 &&
-								fileInputRef.current?.click()
-							}
+							onClick={() => {
+								if (
+									pendingFiles.length < 3 &&
+									uploadedFilesCount < MAX_TOTAL_FILES
+								) {
+									fileInputRef.current?.click();
+									// Ensure focus returns to text input after file dialog closes
+									setTimeout(() => {
+										if (inputRef.current) {
+											inputRef.current.focus();
+										}
+									}, 100);
+								}
+							}}
 							aria-label="Attach file"
 							type="button"
-							disabled={pendingFiles.length >= 3}
+							disabled={
+								pendingFiles.length >= 3 ||
+								uploadedFilesCount >= MAX_TOTAL_FILES
+							}
 							title={
-								pendingFiles.length >= 3
-									? "Maximum 3 files allowed"
-									: "Attach file (max 3)"
+								uploadedFilesCount >= MAX_TOTAL_FILES
+									? `Maximum ${MAX_TOTAL_FILES} files allowed for entire conversation`
+									: pendingFiles.length >= 3
+									? "Maximum 3 files allowed per message"
+									: "Attach file (max 3 per message, 5 total)"
 							}
 						>
 							<FaPaperclip
 								className="w-5 h-5 transition-colors"
 								style={{
 									color:
-										pendingFiles.length >= 3
+										pendingFiles.length >= 3 ||
+										uploadedFilesCount >= MAX_TOTAL_FILES
 											? "#9ca3af"
 											: themeColor,
 								}}
@@ -925,7 +1123,11 @@ export default function Chatbot({
 						</button>
 						{pendingFiles.length >= 3 && (
 							<div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-3 py-1.5 bg-gray-800 text-white text-xs rounded-lg whitespace-nowrap z-50 shadow-lg">
-								Max 3 files allowed
+								{pendingFiles.length >= 3
+									? "Max 3 files per message"
+									: uploadedFilesCount >= MAX_TOTAL_FILES
+									? `Max ${MAX_TOTAL_FILES} files for entire conversation`
+									: "Max 3 files allowed"}
 								<div className="absolute top-full left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-800"></div>
 							</div>
 						)}
@@ -944,13 +1146,18 @@ export default function Chatbot({
 						placeholder="Type a message ..."
 						value={input}
 						onChange={(e) => setInput(e.target.value)}
-						onKeyDown={(e) => e.key === "Enter" && handleSend()}
+						onKeyDown={(e) => handleInputKeyDown(e, handleSend)}
 						aria-label="Type a message"
 					/>
 					<button
-						className="text-white p-2.5 rounded-xl transition-all duration-200 cursor-pointer hover:scale-105 active:scale-95 shadow-sm hover:shadow-md"
+						className={`text-white p-2.5 rounded-xl transition-all duration-200 shadow-sm hover:shadow-md ${
+							!input.trim()
+								? "opacity-50 cursor-not-allowed"
+								: "cursor-pointer hover:scale-105 active:scale-95"
+						}`}
 						style={{ backgroundColor: themeColor }}
 						onClick={handleSend}
+						disabled={!input.trim()}
 						aria-label="Send message"
 					>
 						<FaPaperPlane className="w-4 h-4" />

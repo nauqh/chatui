@@ -125,3 +125,83 @@
 	scrollbar-width: thin;
 	scrollbar-color: transparent;
 }
+
+/* Tierra brand colors */
+:root {
+	--tierra-brown: #b48c72;
+	--tierra-cream: #f8f3ef;
+}
+
+.tierra-brown {
+	color: var(--tierra-brown);
+}
+
+.tierra-brown-bg {
+	background-color: var(--tierra-brown);
+}
+
+.tierra-cream {
+	background-color: var(--tierra-cream);
+}
+
+.hover\:tierra-brown:hover {
+	color: var(--tierra-brown);
+}
+
+.hover\:tierra-brown-bg:hover {
+	background-color: var(--tierra-brown);
+}
+
+.hover\:text-white:hover {
+	color: white;
+}
+
+/* Smooth transitions */
+.transition-smooth {
+	transition: all 0.3s ease-in-out;
+}
+
+/* Custom animations */
+@keyframes slideInFromRight {
+	from {
+		transform: translateX(100%);
+		opacity: 0;
+	}
+	to {
+		transform: translateX(0);
+		opacity: 1;
+	}
+}
+
+@keyframes slideOutToRight {
+	from {
+		transform: translateX(0);
+		opacity: 1;
+	}
+	to {
+		transform: translateX(100%);
+		opacity: 0;
+	}
+}
+
+.slide-in-right {
+	animation: slideInFromRight 0.3s ease-out forwards;
+}
+
+.slide-out-right {
+	animation: slideOutToRight 0.3s ease-in forwards;
+}
+
+/* Custom dropdown styling */
+select {
+	border-radius: 0.5rem;
+}
+
+select:focus {
+	border-radius: 0.5rem;
+}
+
+/* Style dropdown options */
+select option {
+	border-radius: 0.5rem;
+}
