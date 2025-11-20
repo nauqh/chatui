@@ -48,7 +48,7 @@ import { Message, PendingFile, CustomerInfo, ChatRequestBody } from "./types";
 // const DEFAULT_AVATAR = "/message.png";
 const DEFAULT_AVATAR =
 	"https://i.pinimg.com/originals/7d/9b/1d/7d9b1d662b28cd365b33a01a3d0288e1.gif";
-const API_BASE_URL = "http://localhost:8000";
+const API_BASE_URL = "https://tierra.up.railway.app";
 const TYPING_DELAY = 1200;
 const CONV_ID_STORAGE_KEY = "chatbot_conversation_id";
 const DEFAULT_THEME_COLOR = "#b48c72";
