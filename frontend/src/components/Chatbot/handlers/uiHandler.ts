@@ -29,59 +29,6 @@ export const getMessageClasses = (sender: "user" | "bot"): string => {
 };
 
 /**
- * Gets CSS classes for chat window styling
- */
-export const getChatWindowClasses = (open: boolean): string => {
-	const baseClasses =
-		"fixed z-50 bg-white flex flex-col transition-all duration-300 ease-in-out";
-	const positionClasses =
-		"right-0 left-0 top-0 bottom-0 md:right-6 md:left-auto md:top-auto md:bottom-25 md:w-96 md:max-w-full md:rounded-2xl md:shadow-2xl md:h-[550px] md:transform md:origin-bottom-right";
-
-	return open
-		? `${baseClasses} opacity-100 scale-100 translate-y-0 visible pointer-events-auto ${positionClasses}`
-		: `${baseClasses} opacity-0 scale-95 translate-y-4 invisible pointer-events-none ${positionClasses}`;
-};
-
-/**
- * Creates initial welcome messages
- */
-export const createWelcomeMessages = (
-	customerName: string,
-	typingDelay: number = DEFAULT_TYPING_DELAY
-): { messages: Message[]; timeouts: NodeJS.Timeout[] } => {
-	const messages: Message[] = [];
-	const timeouts: NodeJS.Timeout[] = [];
-
-	// First message
-	const firstMessage: Message = {
-		sender: "bot",
-		text: `Chào ${customerName}, mình là trợ lý AI của Tierra`,
-		timestamp: new Date().toISOString(),
-	};
-
-	// Second message
-	const secondMessage: Message = {
-		sender: "bot",
-		text: "Mình rất sẵn lòng hỗ trợ bạn !",
-		timestamp: new Date().toISOString(),
-	};
-
-	// Schedule first message
-	const firstTimeout = setTimeout(() => {
-		messages.push(firstMessage);
-	}, typingDelay);
-	timeouts.push(firstTimeout);
-
-	// Schedule second message
-	const secondTimeout = setTimeout(() => {
-		messages.push(secondMessage);
-	}, typingDelay * 2);
-	timeouts.push(secondTimeout);
-
-	return { messages, timeouts };
-};
-
-/**
  * Handles scroll interaction start
  */
 export const handleScrollStart = (

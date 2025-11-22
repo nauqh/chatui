@@ -82,17 +82,6 @@ export const handleCustomerSubmit = (
 };
 
 /**
- * Handles closing customer modal
- */
-export const handleCloseCustomerModal = (
-	setShowCustomerModal: (show: boolean) => void,
-	setCustomerInfo: (info: CustomerInfo) => void
-): void => {
-	setShowCustomerModal(false);
-	setCustomerInfo({ name: "", phone: "" });
-};
-
-/**
  * Resets customer registration state
  */
 export const resetCustomerRegistration = (
